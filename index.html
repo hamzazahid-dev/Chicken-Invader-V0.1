@@ -1,0 +1,2073 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>🐔 CHICKEN INVADERS – Realistic Ship</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            user-select: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+        body {
+            background: #0a0a0f;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            overflow: hidden;
+            font-family: 'Courier New', monospace;
+            touch-action: none;
+        }
+        canvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+            object-fit: contain;
+            background: #0d0d14;
+            border: none;
+            image-rendering: pixelated;
+            touch-action: none;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+        (function() {
+            'use strict';
+
+            // ─── Canvas ──────────────────────────────────────────────
+            const canvas = document.getElementById('gameCanvas');
+            const ctx = canvas.getContext('2d');
+            const W = 450,
+                H = 800;
+            canvas.width = W;
+            canvas.height = H;
+
+            // ─── Options State ──────────────────────────────────────
+            const options = {
+                sound: true,
+                music: true,
+                vibration: true,
+                difficulty: 'normal',
+            };
+
+            // ─── Audio Context for BGM & SFX ──────────────────────
+            let audioCtx = null;
+            let bgmOscillators = [];
+            let bgmGainNode = null;
+            let bgmRunning = false;
+            let bgmInterval = null;
+
+            function initAudio() {
+                if (!audioCtx) {
+                    audioCtx = new(window.AudioContext || window.webkitAudioContext)();
+                }
+                if (audioCtx.state === 'suspended') {
+                    audioCtx.resume();
+                }
+            }
+
+            function playShootSound() {
+                if (!options.sound) return;
+                try {
+                    initAudio();
+                    const osc = audioCtx.createOscillator();
+                    const gain = audioCtx.createGain();
+                    osc.type = 'square';
+                    osc.frequency.setValueAtTime(800, audioCtx.currentTime);
+                    osc.frequency.exponentialRampToValueAtTime(200, audioCtx.currentTime + 0.08);
+                    gain.gain.setValueAtTime(0.06, audioCtx.currentTime);
+                    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.08);
+                    osc.connect(gain);
+                    gain.connect(audioCtx.destination);
+                    osc.start(audioCtx.currentTime);
+                    osc.stop(audioCtx.currentTime + 0.08);
+                } catch (e) {}
+            }
+
+            function playExplosionSound() {
+                if (!options.sound) return;
+                try {
+                    initAudio();
+                    const osc = audioCtx.createOscillator();
+                    const gain = audioCtx.createGain();
+                    osc.type = 'sawtooth';
+                    osc.frequency.setValueAtTime(150, audioCtx.currentTime);
+                    osc.frequency.exponentialRampToValueAtTime(30, audioCtx.currentTime + 0.3);
+                    gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+                    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.3);
+                    osc.connect(gain);
+                    gain.connect(audioCtx.destination);
+                    osc.start(audioCtx.currentTime);
+                    osc.stop(audioCtx.currentTime + 0.3);
+                } catch (e) {}
+            }
+
+            function startBGM() {
+                if (!options.music) return;
+                try {
+                    initAudio();
+                    if (bgmRunning) return;
+                    bgmGainNode = audioCtx.createGain();
+                    bgmGainNode.gain.value = 0.10;
+                    bgmGainNode.connect(audioCtx.destination);
+
+                    const notes = [
+                        523.25, 587.33, 659.25, 523.25,
+                        659.25, 587.33, 523.25, 493.88,
+                        523.25, 587.33, 659.25, 523.25,
+                        659.25, 587.33, 523.25, 493.88,
+                        523.25, 523.25, 587.33, 587.33,
+                        659.25, 659.25, 587.33, 523.25,
+                        659.25, 587.33, 523.25, 493.88,
+                        523.25, 587.33, 659.25, 523.25,
+                    ];
+
+                    let time = audioCtx.currentTime + 0.1;
+                    const noteDuration = 0.12;
+                    const gap = 0.02;
+
+                    for (let i = 0; i < notes.length; i++) {
+                        const osc = audioCtx.createOscillator();
+                        const gain = audioCtx.createGain();
+                        osc.type = 'square';
+                        osc.frequency.value = notes[i];
+                        gain.gain.setValueAtTime(0.06, time);
+                        gain.gain.exponentialRampToValueAtTime(0.001, time + noteDuration);
+                        osc.connect(gain);
+                        gain.connect(bgmGainNode);
+                        osc.start(time);
+                        osc.stop(time + noteDuration + gap);
+                        bgmOscillators.push(osc, gain);
+                        time += noteDuration + gap;
+                    }
+
+                    const bassNotes = [261.63, 261.63, 392.00, 392.00, 261.63, 261.63, 392.00, 392.00];
+                    let bassTime = audioCtx.currentTime + 0.3;
+                    for (let i = 0; i < bassNotes.length * 2; i++) {
+                        const osc = audioCtx.createOscillator();
+                        const gain = audioCtx.createGain();
+                        osc.type = 'sawtooth';
+                        osc.frequency.value = bassNotes[i % bassNotes.length] * 0.5;
+                        gain.gain.setValueAtTime(0.04, bassTime);
+                        gain.gain.exponentialRampToValueAtTime(0.001, bassTime + noteDuration * 1.5);
+                        osc.connect(gain);
+                        gain.connect(bgmGainNode);
+                        osc.start(bassTime);
+                        osc.stop(bassTime + noteDuration * 1.5 + gap);
+                        bgmOscillators.push(osc, gain);
+                        bassTime += noteDuration * 1.5 + gap;
+                    }
+
+                    bgmRunning = true;
+
+                    const loopTime = notes.length * (noteDuration + gap) + 0.5;
+                    if (bgmInterval) clearTimeout(bgmInterval);
+                    bgmInterval = setTimeout(() => {
+                        bgmRunning = false;
+                        if (options.music && (appState === 'menu' || appState === 'playing' || appState ===
+                                'gameover')) {
+                            startBGM();
+                        }
+                    }, loopTime * 1000 + 200);
+
+                } catch (e) {
+                    console.log('BGM error:', e);
+                }
+            }
+
+            function stopBGM() {
+                bgmRunning = false;
+                if (bgmInterval) {
+                    clearTimeout(bgmInterval);
+                    bgmInterval = null;
+                }
+                for (const node of bgmOscillators) {
+                    try { node.stop && node.stop(); } catch (e) {}
+                    try { node.disconnect && node.disconnect(); } catch (e) {}
+                }
+                bgmOscillators = [];
+                if (bgmGainNode) {
+                    try { bgmGainNode.disconnect(); } catch (e) {}
+                    bgmGainNode = null;
+                }
+            }
+
+            function toggleMusic() {
+                options.music = !options.music;
+                if (!options.music) {
+                    stopBGM();
+                } else {
+                    stopBGM();
+                    setTimeout(startBGM, 200);
+                }
+            }
+
+            function toggleSound() {
+                options.sound = !options.sound;
+                if (options.sound) {
+                    playShootSound();
+                }
+            }
+
+            function toggleVibration() {
+                options.vibration = !options.vibration;
+                if (options.vibration && navigator.vibrate) {
+                    navigator.vibrate(50);
+                }
+            }
+
+            function setDifficulty(diff) {
+                options.difficulty = diff;
+            }
+
+            // ─── Pixel‑Art Factory ──────────────────────────────────
+            const spriteCache = new Map();
+
+            function makePixelArt(rows, cols, data, color, scale) {
+                const key = rows + 'x' + cols + color + scale + data.join('');
+                if (spriteCache.has(key)) return spriteCache.get(key);
+                const surf = document.createElement('canvas');
+                surf.width = cols;
+                surf.height = rows;
+                const sctx = surf.getContext('2d');
+                for (let y = 0; y < rows; y++) {
+                    const row = data[y];
+                    if (!row) continue;
+                    for (let x = 0; x < cols; x++) {
+                        if (row[x]) {
+                            sctx.fillStyle = color;
+                            sctx.fillRect(x, y, 1, 1);
+                        }
+                    }
+                }
+                const img = new Image();
+                img.src = surf.toDataURL();
+                spriteCache.set(key, img);
+                return img;
+            }
+
+            // ─── Sprite Definitions ──────────────────────────────────
+            const CHICKEN_PIXELS = [
+                [0, 0, 1, 1, 1, 1, 0, 0],
+                [0, 1, 1, 1, 1, 1, 1, 0],
+                [1, 1, 0, 1, 1, 0, 1, 1],
+                [1, 1, 1, 1, 1, 1, 1, 1],
+                [0, 1, 1, 1, 1, 1, 1, 0],
+                [0, 0, 1, 0, 0, 1, 0, 0],
+                [0, 0, 1, 1, 1, 1, 0, 0],
+                [0, 1, 0, 0, 0, 0, 1, 0]
+            ];
+
+            const FAST_CHICKEN = [
+                [0, 0, 1, 1, 0, 0],
+                [0, 1, 1, 1, 1, 0],
+                [1, 1, 1, 1, 1, 1],
+                [1, 1, 1, 1, 1, 1],
+                [0, 1, 1, 1, 1, 0],
+                [0, 0, 1, 1, 0, 0]
+            ];
+
+            const TANK_CHICKEN = [
+                [0, 0, 0, 1, 1, 1, 1, 0, 0, 0],
+                [0, 0, 1, 1, 1, 1, 1, 1, 0, 0],
+                [0, 1, 1, 1, 1, 1, 1, 1, 1, 0],
+                [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+                [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+                [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+                [0, 1, 1, 1, 1, 1, 1, 1, 1, 0],
+                [0, 0, 1, 1, 1, 1, 1, 1, 0, 0],
+                [0, 0, 0, 1, 0, 0, 1, 0, 0, 0],
+                [0, 0, 0, 0, 1, 1, 0, 0, 0, 0]
+            ];
+
+            const GREEN_MONSTER = [
+                [0, 0, 1, 1, 1, 1, 0, 0],
+                [0, 1, 0, 1, 1, 0, 1, 0],
+                [1, 0, 1, 1, 1, 1, 0, 1],
+                [1, 1, 1, 0, 0, 1, 1, 1],
+                [1, 1, 1, 0, 0, 1, 1, 1],
+                [0, 1, 1, 1, 1, 1, 1, 0],
+                [0, 0, 1, 0, 0, 1, 0, 0],
+                [0, 1, 0, 0, 0, 0, 1, 0]
+            ];
+
+            // --- NEW 12x12 REALISTIC SPACESHIP ---
+            const CRAFT_PIXELS = [
+                [0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0], // 0  Nose
+                [0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0], // 1
+                [0, 0, 1, 1, 0, 1, 1, 0, 1, 1, 0, 0], // 2  Cockpit
+                [0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0], // 3  Wings
+                [0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0], // 4  Wings
+                [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], // 5  Fuselage
+                [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], // 6  Fuselage
+                [0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0], // 7  Taper
+                [0, 0, 1, 1, 1, 0, 0, 1, 1, 1, 0, 0], // 8  Engines
+                [0, 0, 1, 1, 1, 0, 0, 1, 1, 1, 0, 0], // 9  Engines
+                [0, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 0], // 10 Nozzles
+                [0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0], // 11 Nozzle tips
+            ];
+
+            const BULLET_PIXELS = [
+                [0, 1, 1, 0],
+                [1, 1, 1, 1],
+                [1, 1, 1, 1],
+                [0, 1, 1, 0]
+            ];
+
+            const BOSS_PIXELS = (() => {
+                const k = [
+                    [0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0],
+                    [0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0],
+                    [0, 0, 1, 1, 0, 1, 1, 1, 1, 0, 1, 1, 0, 0, 0, 0],
+                    [0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0],
+                    [0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0],
+                    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0],
+                    [1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 0],
+                    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0],
+                    [0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0],
+                    [0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0],
+                    [0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0],
+                    [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0],
+                    [0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0],
+                    [0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0],
+                    [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0],
+                    [0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0]
+                ];
+                for (let c = 4; c <= 11; c++) k[0][c] = 1;
+                for (let c = 3; c <= 12; c++) k[1][c] = 1;
+                return k;
+            })();
+
+            const SHIELD_PIXELS = [
+                [0, 1, 1, 0],
+                [1, 1, 1, 1],
+                [1, 1, 1, 1],
+                [0, 1, 1, 0]
+            ];
+            const RAPID_PIXELS = [
+                [1, 1, 1, 1],
+                [1, 0, 0, 1],
+                [1, 0, 0, 1],
+                [1, 1, 1, 1]
+            ];
+            const MULTI_PIXELS = [
+                [0, 1, 0, 1, 0],
+                [1, 1, 1, 1, 1],
+                [0, 1, 0, 1, 0],
+                [1, 1, 1, 1, 1],
+                [0, 1, 0, 1, 0]
+            ];
+
+            const chickenSprite = makePixelArt(8, 8, CHICKEN_PIXELS, '#ff8844', 4);
+            const fastChickenSprite = makePixelArt(6, 6, FAST_CHICKEN, '#ff4466', 4);
+            const tankChickenSprite = makePixelArt(10, 10, TANK_CHICKEN, '#66dd88', 3);
+            const greenMonsterSprite = makePixelArt(8, 8, GREEN_MONSTER, '#66ff66', 4);
+            const craftSprite = makePixelArt(12, 12, CRAFT_PIXELS, '#66ddff', 3);
+            const bulletSprite = makePixelArt(4, 4, BULLET_PIXELS, '#66ddff', 2);
+            const bossSprite = makePixelArt(16, 16, BOSS_PIXELS, '#ff3366', 3);
+            const shieldSprite = makePixelArt(4, 4, SHIELD_PIXELS, '#44ddff', 5);
+            const rapidSprite = makePixelArt(4, 4, RAPID_PIXELS, '#ffaa44', 5);
+            const multiSprite = makePixelArt(5, 5, MULTI_PIXELS, '#ff66ff', 4);
+
+            // ─── Constants ──────────────────────────────────────────
+            const PLAYER_W = 36;
+            const PLAYER_H = 36;
+            const PLAYER_SPEED = 4.5;
+            const BULLET_SPEED = 9;
+            const BULLET_W = 8,
+                BULLET_H = 8;
+            const CHICKEN_W = 32,
+                CHICKEN_H = 32;
+            const BOSS_W = 48,
+                BOSS_H = 48;
+            const STAGES_PER_LEVEL = 10;
+            const BASE_CHICKENS_PER_WAVE = 8;
+            const ENEMY_BULLET_SPEED = 3;
+
+            // ─── Difficulty scaling ──────────────────────────────────
+            function getDifficultyMultiplier() {
+                switch (options.difficulty) {
+                    case 'easy':
+                        return 0.6;
+                    case 'hard':
+                        return 1.5;
+                    default:
+                        return 1.0;
+                }
+            }
+
+            // ─── State ──────────────────────────────────────────────
+            let appState = 'menu';
+            let menuTime = 0;
+            let screenShake = { x: 0, y: 0, intensity: 0 };
+
+            const menuState = {
+                selectedIndex: 0,
+                hoverIndex: -1,
+                buttonFlash: 0,
+            };
+
+            const game = {
+                level: 1,
+                stage: 1,
+                score: 0,
+                combo: 0,
+                maxCombo: 0,
+                chickensKilled: 0,
+                chickensInWave: 0,
+                chickensSpawnedInWave: 0,
+                waveActive: false,
+                bossActive: false,
+                bossDefeated: false,
+                gameOver: false,
+                levelComplete: false,
+                frame: 0,
+                spawnTimer: 0,
+                bossIntro: 0,
+                player: {
+                    x: W / 2 - PLAYER_W / 2,
+                    y: H - 80,
+                    w: PLAYER_W,
+                    h: PLAYER_H,
+                    lives: 3,
+                    shield: false,
+                    hasRapid: false,
+                    hasMulti: false,
+                    invincible: 0,
+                },
+                bullets: [],
+                chickens: [],
+                enemyBullets: [],
+                powerups: [],
+                particles: [],
+                boss: null,
+                bossBullets: [],
+                shootCooldown: 0,
+                touchShoot: false,
+                mouseDown: false,
+                comboTimeout: 0,
+                dying: false,
+                deathTimer: 0,
+                deathParticles: [],
+                respawnTimer: 0,
+            };
+
+            // ─── Menu Buttons ────────────────────────────────────────
+            const mainButtons = [
+                { id: 'play', label: '🚀 SAVE THE WORLD', y: 380 },
+                { id: 'hall', label: '🏆 HALL OF FAME', y: 450 },
+                { id: 'options', label: '⚙️ OPTIONS', y: 520 },
+                { id: 'quit', label: '🚪 QUIT', y: 590 },
+            ];
+            const hallButtons = [{ id: 'back', label: '← BACK', y: 680 }];
+            let optionsButtons = [
+                { id: 'sound_toggle', label: '🔊 SOUND', y: 250 },
+                { id: 'music_toggle', label: '🎵 MUSIC', y: 320 },
+                { id: 'vibration_toggle', label: '📱 VIBRATION', y: 390 },
+                { id: 'difficulty_cycle', label: '🎯 DIFFICULTY', y: 460 },
+                { id: 'back', label: '← BACK', y: 680 },
+            ];
+
+            let currentButtons = mainButtons;
+            let menuScreen = 'main';
+
+            // ─── Input ──────────────────────────────────────────────
+            const keys = { left: false, right: false, space: false };
+            let spacePressed = false;
+
+            // ─── Touch / Mouse ──────────────────────────────────────
+            function getCanvasCoords(e) {
+                const rect = canvas.getBoundingClientRect();
+                const scaleX = canvas.width / rect.width;
+                const scaleY = canvas.height / rect.height;
+                let clientX, clientY;
+                if (e.touches) {
+                    clientX = e.touches[0].clientX - rect.left;
+                    clientY = e.touches[0].clientY - rect.top;
+                } else {
+                    clientX = e.clientX - rect.left;
+                    clientY = e.clientY - rect.top;
+                }
+                return { x: clientX * scaleX, y: clientY * scaleY };
+            }
+
+            function isOverButton(btn, cx, cy) {
+                const bw = 220,
+                    bh = 44;
+                const bx = W / 2 - bw / 2;
+                const by = btn.y - bh / 2;
+                return cx >= bx && cx <= bx + bw && cy >= by && cy <= by + bh;
+            }
+
+            // ─── Menu Actions ────────────────────────────────────────
+            function onMenuClick(id) {
+                menuState.buttonFlash = 8;
+
+                if (id === 'sound_toggle') { toggleSound();
+                    updateOptionsButtons(); return; }
+                if (id === 'music_toggle') { toggleMusic();
+                    updateOptionsButtons(); return; }
+                if (id === 'vibration_toggle') { toggleVibration();
+                    updateOptionsButtons(); return; }
+                if (id === 'difficulty_cycle') {
+                    const diffs = ['easy', 'normal', 'hard'];
+                    const idx = diffs.indexOf(options.difficulty);
+                    const next = diffs[(idx + 1) % diffs.length];
+                    setDifficulty(next);
+                    updateOptionsButtons();
+                    return;
+                }
+
+                switch (id) {
+                    case 'play':
+                        startGame();
+                        break;
+                    case 'hall':
+                        menuScreen = 'hall';
+                        currentButtons = hallButtons;
+                        menuState.selectedIndex = 0;
+                        break;
+                    case 'options':
+                        menuScreen = 'options';
+                        currentButtons = optionsButtons;
+                        menuState.selectedIndex = 0;
+                        updateOptionsButtons();
+                        break;
+                    case 'quit':
+                        if (confirm('Quit the game?')) {
+                            document.body.innerHTML =
+                                '<h1 style="color:#fff;text-align:center;margin-top:40vh;font-family:Courier New">👋 See you, commander!</h1>';
+                        }
+                        break;
+                    case 'back':
+                        menuScreen = 'main';
+                        currentButtons = mainButtons;
+                        menuState.selectedIndex = 0;
+                        break;
+                    default:
+                        break;
+                }
+            }
+
+            function updateOptionsButtons() {
+                const soundLabel = options.sound ? '🔊 SOUND: ON' : '🔇 SOUND: OFF';
+                const musicLabel = options.music ? '🎵 MUSIC: ON' : '🎵 MUSIC: OFF';
+                const vibeLabel = options.vibration ? '📱 VIBRATION: ON' : '📱 VIBRATION: OFF';
+                const diffLabel = '🎯 DIFFICULTY: ' + options.difficulty.toUpperCase();
+
+                optionsButtons = [
+                    { id: 'sound_toggle', label: soundLabel, y: 250 },
+                    { id: 'music_toggle', label: musicLabel, y: 320 },
+                    { id: 'vibration_toggle', label: vibeLabel, y: 390 },
+                    { id: 'difficulty_cycle', label: diffLabel, y: 460 },
+                    { id: 'back', label: '← BACK', y: 680 },
+                ];
+                if (menuScreen === 'options') {
+                    currentButtons = optionsButtons;
+                }
+            }
+
+            function handleMenuClick(e) {
+                e.preventDefault();
+                const pos = getCanvasCoords(e);
+                if (menuScreen === 'main' && pos.x > W - 50 && pos.y < 45) {
+                    toggleMusic();
+                    updateOptionsButtons();
+                    return;
+                }
+                for (let i = 0; i < currentButtons.length; i++) {
+                    const btn = currentButtons[i];
+                    if (isOverButton(btn, pos.x, pos.y)) {
+                        onMenuClick(btn.id);
+                        return;
+                    }
+                }
+            }
+
+            function handleMenuMove(e) {
+                e.preventDefault();
+                const pos = getCanvasCoords(e);
+                let found = -1;
+                for (let i = 0; i < currentButtons.length; i++) {
+                    const btn = currentButtons[i];
+                    if (isOverButton(btn, pos.x, pos.y)) {
+                        found = i;
+                        break;
+                    }
+                }
+                menuState.hoverIndex = found;
+            }
+
+            // ─── Game Input ──────────────────────────────────────────
+            function handleGameTouchStart(e) {
+                e.preventDefault();
+                if (appState === 'gameover') {
+                    onCanvasClick(e);
+                    return;
+                }
+                if (game.dying) return;
+                const rect = canvas.getBoundingClientRect();
+                const scaleX = canvas.width / rect.width;
+                const touch = e.touches[0];
+                const canvasX = (touch.clientX - rect.left) * scaleX;
+                game.player.x = Math.max(0, Math.min(W - game.player.w, canvasX - game.player.w / 2));
+                game.shootCooldown = 0;
+                game.touchShoot = true;
+            }
+
+            function handleGameTouchMove(e) {
+                e.preventDefault();
+                if (appState === 'gameover' || game.dying) return;
+                const rect = canvas.getBoundingClientRect();
+                const scaleX = canvas.width / rect.width;
+                const touch = e.touches[0];
+                const canvasX = (touch.clientX - rect.left) * scaleX;
+                game.player.x = Math.max(0, Math.min(W - game.player.w, canvasX - game.player.w / 2));
+            }
+
+            function handleGameTouchEnd(e) {
+                e.preventDefault();
+                game.touchShoot = false;
+            }
+
+            // ─── Unified events ──────────────────────────────────────
+            function onCanvasClick(e) {
+                if (appState === 'menu') {
+                    handleMenuClick(e);
+                } else if (appState === 'gameover') {
+                    const pos = getCanvasCoords(e);
+                    if (pos.y > H / 2 + 40 && pos.y < H / 2 + 80) {
+                        if (pos.x > W / 2 - 80 && pos.x < W / 2 - 20) {
+                            startGame();
+                        } else if (pos.x > W / 2 + 20 && pos.x < W / 2 + 80) {
+                            goToMenu();
+                        }
+                    }
+                }
+            }
+
+            function onCanvasMove(e) {
+                if (appState === 'menu') handleMenuMove(e);
+            }
+
+            canvas.addEventListener('click', onCanvasClick);
+            canvas.addEventListener('touchstart', (e) => {
+                if (appState === 'menu') handleMenuClick(e);
+                else if (appState === 'playing') handleGameTouchStart(e);
+                else if (appState === 'gameover') onCanvasClick(e);
+            }, { passive: false });
+            canvas.addEventListener('touchmove', (e) => {
+                if (appState === 'playing') handleGameTouchMove(e);
+                else if (appState === 'menu') handleMenuMove(e);
+            }, { passive: false });
+            canvas.addEventListener('touchend', (e) => {
+                if (appState === 'playing') handleGameTouchEnd(e);
+            }, { passive: false });
+
+            canvas.addEventListener('mousedown', (e) => {
+                if (appState === 'playing' && !game.dying) {
+                    const rect = canvas.getBoundingClientRect();
+                    const scaleX = canvas.width / rect.width;
+                    const canvasX = (e.clientX - rect.left) * scaleX;
+                    game.player.x = Math.max(0, Math.min(W - game.player.w, canvasX - game.player.w / 2));
+                    game.mouseDown = true;
+                    game.shootCooldown = 0;
+                }
+            });
+            canvas.addEventListener('mousemove', (e) => {
+                if (appState === 'playing' && game.mouseDown && !game.dying) {
+                    const rect = canvas.getBoundingClientRect();
+                    const scaleX = canvas.width / rect.width;
+                    const canvasX = (e.clientX - rect.left) * scaleX;
+                    game.player.x = Math.max(0, Math.min(W - game.player.w, canvasX - game.player.w / 2));
+                }
+            });
+            canvas.addEventListener('mouseup', () => { if (appState === 'playing') game.mouseDown = false; });
+            canvas.addEventListener('mouseleave', () => { if (appState === 'playing') game.mouseDown = false; });
+
+            // ─── Keyboard ──────────────────────────────────────────────
+            document.addEventListener('keydown', (e) => {
+                const k = e.key;
+                if (appState === 'menu') {
+                    if (k === 'ArrowDown' || k === 's') { e.preventDefault();
+                        menuState.selectedIndex = (menuState.selectedIndex + 1) % currentButtons.length; } else if (k ===
+                        'ArrowUp' || k === 'w') { e.preventDefault();
+                        menuState.selectedIndex = (menuState.selectedIndex - 1 + currentButtons.length) % currentButtons
+                            .length; } else if (k === 'Enter' || k === ' ') { e.preventDefault(); const btn =
+                            currentButtons[menuState.selectedIndex]; if (btn) onMenuClick(btn.id); } else if (k ===
+                        'Escape' || k === 'Backspace') { if (menuScreen !== 'main') onMenuClick('back'); } else if (k ===
+                        'm' || k === 'M') { toggleMusic();
+                        updateOptionsButtons(); }
+                    return;
+                }
+                if (appState === 'gameover') {
+                    if (k === 'r' || k === 'R') startGame();
+                    if (k === 'm' || k === 'M') goToMenu();
+                    return;
+                }
+                if (appState === 'playing') {
+                    if (game.dying) return;
+                    if (k === 'ArrowLeft' || k === 'a') keys.left = true;
+                    if (k === 'ArrowRight' || k === 'd') keys.right = true;
+                    if (k === ' ') { e.preventDefault(); if (!keys.space) { keys.space = true;
+                            spacePressed = true; } }
+                    if (k === 'm' || k === 'M') { toggleMusic();
+                        updateOptionsButtons(); }
+                }
+            });
+            document.addEventListener('keyup', (e) => {
+                const k = e.key;
+                if (appState === 'playing') {
+                    if (k === 'ArrowLeft' || k === 'a') keys.left = false;
+                    if (k === 'ArrowRight' || k === 'd') keys.right = false;
+                    if (k === ' ') { e.preventDefault();
+                        keys.space = false; }
+                }
+            });
+
+            // ─── Game Functions ──────────────────────────────────────
+
+            function startGame() {
+                stopBGM();
+                Object.assign(game, {
+                    level: 1,
+                    stage: 1,
+                    score: 0,
+                    combo: 0,
+                    maxCombo: 0,
+                    chickensKilled: 0,
+                    chickensInWave: 0,
+                    chickensSpawnedInWave: 0,
+                    waveActive: false,
+                    bossActive: false,
+                    bossDefeated: false,
+                    gameOver: false,
+                    levelComplete: false,
+                    frame: 0,
+                    spawnTimer: 0,
+                    bossIntro: 0,
+                    player: {
+                        x: W / 2 - PLAYER_W / 2,
+                        y: H - 80,
+                        w: PLAYER_W,
+                        h: PLAYER_H,
+                        lives: 3,
+                        shield: false,
+                        hasRapid: false,
+                        hasMulti: false,
+                        invincible: 0,
+                    },
+                    bullets: [],
+                    chickens: [],
+                    enemyBullets: [],
+                    powerups: [],
+                    particles: [],
+                    boss: null,
+                    bossBullets: [],
+                    shootCooldown: 0,
+                    touchShoot: false,
+                    mouseDown: false,
+                    comboTimeout: 0,
+                    dying: false,
+                    deathTimer: 0,
+                    deathParticles: [],
+                });
+                appState = 'playing';
+                screenShake.intensity = 0;
+                if (options.music) setTimeout(startBGM, 300);
+                startWave();
+            }
+
+            function goToMenu() {
+                appState = 'menu';
+                menuScreen = 'main';
+                currentButtons = mainButtons;
+                menuState.selectedIndex = 0;
+                menuState.hoverIndex = -1;
+                screenShake.intensity = 0;
+                if (options.music) {
+                    stopBGM();
+                    setTimeout(startBGM, 200);
+                }
+            }
+
+            function startWave() {
+                const diffMul = getDifficultyMultiplier();
+                const count = Math.round((BASE_CHICKENS_PER_WAVE + Math.floor((game.level - 1) * 2)) * diffMul);
+                game.chickensInWave = Math.max(3, count);
+                game.chickensSpawnedInWave = 0;
+                game.waveActive = true;
+                game.spawnTimer = 0;
+            }
+
+            function spawnChicken() {
+                const x = Math.random() * (W - CHICKEN_W);
+                let type = 'normal';
+                const r = Math.random();
+                const diffMul = getDifficultyMultiplier();
+                const fastChance = 0.2 * (diffMul > 1 ? 1.3 : diffMul < 1 ? 0.7 : 1);
+                const tankChance = 0.35 * (diffMul > 1 ? 1.2 : diffMul < 1 ? 0.7 : 1);
+                let shooterChance = 0;
+                if (game.level >= 2) {
+                    shooterChance = Math.min(0.25, 0.05 + (game.level - 2) * 0.03);
+                }
+
+                if (game.level > 2 && r < fastChance) type = 'fast';
+                else if (game.level > 4 && r < tankChance) type = 'tank';
+                else if (r < shooterChance) type = 'shooter';
+
+                let w = CHICKEN_W,
+                    h = CHICKEN_H,
+                    speed, hp = 1,
+                    sprite;
+                const baseSpeed = 1.8 + (game.level - 1) * 0.2;
+                switch (type) {
+                    case 'fast':
+                        w = 24;
+                        h = 24;
+                        speed = (2.8 + (game.level - 1) * 0.25 + Math.random() * 0.4) * (diffMul > 1 ? 1.2 : 1);
+                        hp = 1;
+                        sprite = fastChickenSprite;
+                        break;
+                    case 'tank':
+                        w = 40;
+                        h = 40;
+                        speed = (1.2 + (game.level - 1) * 0.1 + Math.random() * 0.2) * (diffMul > 1 ? 1.1 : 1);
+                        hp = Math.round(3 * (diffMul > 1 ? 1.3 : diffMul < 1 ? 0.7 : 1));
+                        hp = Math.max(1, hp);
+                        sprite = tankChickenSprite;
+                        break;
+                    case 'shooter':
+                        w = 32;
+                        h = 32;
+                        speed = (1.0 + (game.level - 1) * 0.1 + Math.random() * 0.2) * (diffMul > 1 ? 1.1 : 1);
+                        hp = Math.round(2 * (diffMul > 1 ? 1.2 : diffMul < 1 ? 0.8 : 1));
+                        hp = Math.max(1, hp);
+                        sprite = greenMonsterSprite;
+                        break;
+                    default:
+                        speed = (baseSpeed + Math.random() * 0.5) * (diffMul > 1 ? 1.15 : 1);
+                        hp = 1;
+                        sprite = chickenSprite;
+                        break;
+                }
+                const chicken = {
+                    x,
+                    y: -h,
+                    w,
+                    h,
+                    speed: Math.min(speed, 6.0),
+                    hp: hp,
+                    maxHp: hp,
+                    type: type,
+                    sprite: sprite,
+                    shootTimer: 0,
+                    shootInterval: 60 + Math.floor(Math.random() * 30),
+                };
+                game.chickens.push(chicken);
+                game.chickensSpawnedInWave++;
+            }
+
+            function spawnPowerup(x, y) {
+                const dropRate = 0.18 * (options.difficulty === 'easy' ? 1.3 : options.difficulty === 'hard' ? 0.8 : 1);
+                if (Math.random() > dropRate) return;
+                const types = ['shield', 'rapid', 'multi'];
+                const type = types[Math.floor(Math.random() * types.length)];
+                let sprite;
+                switch (type) {
+                    case 'shield':
+                        sprite = shieldSprite;
+                        break;
+                    case 'rapid':
+                        sprite = rapidSprite;
+                        break;
+                    case 'multi':
+                        sprite = multiSprite;
+                        break;
+                }
+                game.powerups.push({
+                    x: x - 12,
+                    y: y - 12,
+                    w: 24,
+                    h: 24,
+                    type: type,
+                    sprite: sprite,
+                    speed: 1.5,
+                });
+            }
+
+            function spawnParticles(x, y, color, count = 12, speedMult = 1) {
+                for (let i = 0; i < count; i++) {
+                    const angle = Math.random() * Math.PI * 2;
+                    const speed = (1 + Math.random() * 3) * speedMult;
+                    game.particles.push({
+                        x,
+                        y,
+                        vx: Math.cos(angle) * speed,
+                        vy: Math.sin(angle) * speed - 1,
+                        life: 30 + Math.random() * 20,
+                        maxLife: 50,
+                        size: 2 + Math.random() * 4,
+                        color: color,
+                    });
+                }
+            }
+
+            function spawnBoss() {
+                const diffMul = getDifficultyMultiplier();
+                const health = Math.round((50 + game.level * 20) * (diffMul > 1 ? 1.4 : diffMul < 1 ? 0.7 : 1));
+                game.boss = {
+                    x: W / 2 - BOSS_W / 2,
+                    y: -BOSS_H - 20,
+                    w: BOSS_W,
+                    h: BOSS_H,
+                    health: health,
+                    maxHealth: health,
+                    speed: (1.9 + game.level * 0.15) * (diffMul > 1 ? 1.15 : 1),
+                    dir: 1,
+                    phase: 0,
+                    attackTimer: 0,
+                    attackInterval: Math.round((35 - Math.min(game.level, 12)) * (diffMul > 1 ? 0.8 : diffMul < 1 ? 1.2 :
+                        1)),
+                    enterY: 40 + Math.random() * 20,
+                    entered: false,
+                };
+                game.bossActive = true;
+                game.bossDefeated = false;
+                game.bossIntro = 60;
+                game.waveActive = false;
+            }
+
+            function bossShoot() {
+                const boss = game.boss;
+                if (!boss || game.gameOver) return;
+                const angle = Math.atan2(game.player.y - boss.y, game.player.x - boss.x);
+                const speed = (3.0 + game.level * 0.15) * (options.difficulty === 'hard' ? 1.15 : 1);
+                const spread = 0.25;
+                game.bossBullets.push({
+                    x: boss.x + boss.w / 2 - 6,
+                    y: boss.y + boss.h - 4,
+                    w: 12,
+                    h: 12,
+                    vx: Math.cos(angle) * speed,
+                    vy: Math.sin(angle) * speed,
+                });
+                if (game.level > 2) {
+                    game.bossBullets.push({
+                        x: boss.x + boss.w / 2 - 6,
+                        y: boss.y + boss.h - 4,
+                        w: 12,
+                        h: 12,
+                        vx: Math.cos(angle - spread) * speed * 0.9,
+                        vy: Math.sin(angle - spread) * speed * 0.9,
+                    });
+                    game.bossBullets.push({
+                        x: boss.x + boss.w / 2 - 6,
+                        y: boss.y + boss.h - 4,
+                        w: 12,
+                        h: 12,
+                        vx: Math.cos(angle + spread) * speed * 0.9,
+                        vy: Math.sin(angle + spread) * speed * 0.9,
+                    });
+                }
+                if (game.level > 5) {
+                    game.bossBullets.push({
+                        x: boss.x + boss.w / 2 - 6,
+                        y: boss.y + boss.h - 4,
+                        w: 12,
+                        h: 12,
+                        vx: Math.cos(angle - spread * 2) * speed * 0.7,
+                        vy: Math.sin(angle - spread * 2) * speed * 0.7,
+                    });
+                    game.bossBullets.push({
+                        x: boss.x + boss.w / 2 - 6,
+                        y: boss.y + boss.h - 4,
+                        w: 12,
+                        h: 12,
+                        vx: Math.cos(angle + spread * 2) * speed * 0.7,
+                        vy: Math.sin(angle + spread * 2) * speed * 0.7,
+                    });
+                }
+                if (Math.random() < 0.3 && game.level > 3) {
+                    for (let i = 0; i < 8; i++) {
+                        const a = (i / 8) * Math.PI * 2 + game.frame * 0.02;
+                        game.bossBullets.push({
+                            x: boss.x + boss.w / 2 - 6,
+                            y: boss.y + boss.h / 2 - 6,
+                            w: 10,
+                            h: 10,
+                            vx: Math.cos(a) * 2.5,
+                            vy: Math.sin(a) * 2.5,
+                        });
+                    }
+                }
+            }
+
+            function rectCollide(a, b) {
+                return a.x < b.x + b.w && a.x + a.w > b.x &&
+                    a.y < b.y + b.h && a.y + a.h > b.y;
+            }
+
+            // ─── Death Animation ──────────────────────────────────────
+
+            function triggerDeathAnimation() {
+                if (game.dying) return;
+                if (game.player.invincible > 0) return;
+                game.dying = true;
+                game.deathTimer = 0;
+                game.player.invincible = 0;
+
+                screenShake.intensity = 12;
+                playExplosionSound();
+                if (options.vibration && navigator.vibrate) {
+                    navigator.vibrate([100, 50, 100]);
+                }
+
+                const px = game.player.x + game.player.w / 2;
+                const py = game.player.y + game.player.h / 2;
+                const colors = ['#ff4444', '#ff8844', '#ffdd44', '#44ddff', '#ff66ff', '#ffffff'];
+                for (let i = 0; i < 50; i++) {
+                    const angle = Math.random() * Math.PI * 2;
+                    const speed = 2 + Math.random() * 6;
+                    const color = colors[Math.floor(Math.random() * colors.length)];
+                    game.deathParticles.push({
+                        x: px + (Math.random() - 0.5) * 20,
+                        y: py + (Math.random() - 0.5) * 20,
+                        vx: Math.cos(angle) * speed,
+                        vy: Math.sin(angle) * speed - 1,
+                        life: 40 + Math.random() * 30,
+                        maxLife: 70,
+                        size: 3 + Math.random() * 6,
+                        color: color,
+                    });
+                }
+                for (let i = 0; i < 15; i++) {
+                    const angle = Math.random() * Math.PI * 2;
+                    const speed = 1 + Math.random() * 3;
+                    game.deathParticles.push({
+                        x: px + (Math.random() - 0.5) * 10,
+                        y: py + (Math.random() - 0.5) * 10,
+                        vx: Math.cos(angle) * speed,
+                        vy: Math.sin(angle) * speed - 2,
+                        life: 50 + Math.random() * 30,
+                        maxLife: 80,
+                        size: 1 + Math.random() * 2,
+                        color: '#66ddff',
+                    });
+                }
+                game.deathTimer = 0;
+                game.player.lives--;
+                if (game.player.lives < 0) game.player.lives = 0;
+            }
+
+            function updateDeathAnimation() {
+                if (!game.dying) return;
+                game.deathTimer++;
+
+                for (let i = game.deathParticles.length - 1; i >= 0; i--) {
+                    const pt = game.deathParticles[i];
+                    pt.x += pt.vx;
+                    pt.y += pt.vy;
+                    pt.vy += 0.08;
+                    pt.life--;
+                    if (pt.life <= 0) {
+                        game.deathParticles.splice(i, 1);
+                    }
+                }
+
+                if (screenShake.intensity > 0) {
+                    screenShake.intensity *= 0.95;
+                    if (screenShake.intensity < 0.1) screenShake.intensity = 0;
+                }
+
+                if (game.deathTimer > 60 || game.deathParticles.length === 0) {
+                    game.dying = false;
+                    game.deathParticles = [];
+                    screenShake.intensity = 0;
+
+                    if (game.player.lives <= 0) {
+                        game.gameOver = true;
+                        appState = 'gameover';
+                    } else {
+                        game.player.x = W / 2 - PLAYER_W / 2;
+                        game.player.y = H - 80;
+                        game.player.invincible = 120;
+                        game.player.hasRapid = false;
+                        game.player.hasMulti = false;
+                        game.player.shield = false;
+                        spawnParticles(game.player.x + game.player.w / 2, game.player.y + game.player.h / 2, '#66ddff',
+                            20, 0.5);
+                        spawnParticles(game.player.x + game.player.w / 2, game.player.y + game.player.h / 2, '#ffffff',
+                            10, 0.3);
+                    }
+                }
+            }
+
+            // ─── Game Update ──────────────────────────────────────────
+
+            function updateGame() {
+                if (game.gameOver) return;
+                if (game.dying) {
+                    updateDeathAnimation();
+                    return;
+                }
+                game.frame++;
+
+                if (keys.left && game.player.x > 0) game.player.x -= PLAYER_SPEED;
+                if (keys.right && game.player.x + game.player.w < W) game.player.x += PLAYER_SPEED;
+
+                if (game.player.invincible > 0) game.player.invincible--;
+                if (game.comboTimeout > 0) {
+                    game.comboTimeout--;
+                    if (game.comboTimeout === 0) game.combo = 0;
+                }
+
+                let shootRate = 8;
+                if (game.player.hasRapid) shootRate = 4;
+                if (spacePressed && !game.gameOver && game.bossIntro === 0) {
+                    if (game.shootCooldown <= 0) {
+                        shoot();
+                        game.shootCooldown = shootRate;
+                    }
+                    spacePressed = false;
+                }
+                if (game.touchShoot && !game.gameOver && game.bossIntro === 0) {
+                    if (game.shootCooldown <= 0) {
+                        shoot();
+                        game.shootCooldown = shootRate;
+                    }
+                }
+                if (game.shootCooldown > 0) game.shootCooldown--;
+
+                for (let i = game.bullets.length - 1; i >= 0; i--) {
+                    const b = game.bullets[i];
+                    b.y -= BULLET_SPEED;
+                    if (b.y + b.h < 0) { game.bullets.splice(i, 1); continue; }
+
+                    let used = false;
+                    for (let j = game.chickens.length - 1; j >= 0; j--) {
+                        const c = game.chickens[j];
+                        if (rectCollide(b, c)) {
+                            c.hp--;
+                            if (c.hp <= 0) {
+                                game.chickens.splice(j, 1);
+                                game.chickensKilled++;
+                                game.combo++;
+                                game.comboTimeout = 60;
+                                if (game.combo > game.maxCombo) game.maxCombo = game.combo;
+                                let points = 10 + Math.floor(game.combo / 5) * 5;
+                                game.score += points;
+                                spawnParticles(c.x + c.w / 2, c.y + c.h / 2, '#ff8844', 10);
+                                spawnPowerup(c.x + c.w / 2, c.y + c.h / 2);
+                            }
+                            used = true;
+                            break;
+                        }
+                    }
+                    if (used) { game.bullets.splice(i, 1); continue; }
+
+                    if (game.boss && !game.bossDefeated && rectCollide(b, game.boss)) {
+                        game.boss.health -= 2 + Math.floor(game.level / 3);
+                        spawnParticles(b.x, b.y, '#ff3366', 5);
+                        if (game.boss.health <= 0) {
+                            game.boss.health = 0;
+                            game.bossDefeated = true;
+                            game.bossActive = false;
+                            game.score += 100 + game.level * 20;
+                            spawnParticles(game.boss.x + game.boss.w / 2, game.boss.y + game.boss.h / 2, '#ffaa00', 40);
+                            game.level++;
+                            game.stage = 1;
+                            game.levelComplete = true;
+                            setTimeout(() => {
+                                game.levelComplete = false;
+                                if (!game.gameOver) startWave();
+                            }, 2000);
+                        }
+                        game.bullets.splice(i, 1);
+                        continue;
+                    }
+                }
+
+                for (let i = game.enemyBullets.length - 1; i >= 0; i--) {
+                    const eb = game.enemyBullets[i];
+                    eb.x += eb.vx;
+                    eb.y += eb.vy;
+                    if (eb.y > H + 20 || eb.x < -20 || eb.x > W + 20) {
+                        game.enemyBullets.splice(i, 1);
+                        continue;
+                    }
+                    if (rectCollide(eb, game.player) && game.player.invincible === 0) {
+                        triggerDeathAnimation();
+                        game.enemyBullets.splice(i, 1);
+                        return;
+                    }
+                }
+
+                for (let i = game.bossBullets.length - 1; i >= 0; i--) {
+                    const bb = game.bossBullets[i];
+                    bb.x += bb.vx;
+                    bb.y += bb.vy;
+                    if (bb.y > H + 20 || bb.x < -20 || bb.x > W + 20) {
+                        game.bossBullets.splice(i, 1);
+                        continue;
+                    }
+                    if (rectCollide(bb, game.player) && game.player.invincible === 0) {
+                        triggerDeathAnimation();
+                        game.bossBullets.splice(i, 1);
+                        return;
+                    }
+                }
+
+                if (game.bossActive && game.boss) {
+                    const boss = game.boss;
+                    if (game.bossIntro > 0) {
+                        game.bossIntro--;
+                        boss.y += (boss.enterY - boss.y) * 0.05;
+                        if (game.bossIntro === 0) boss.entered = true;
+                    } else if (boss.entered && !game.bossDefeated) {
+                        boss.phase += 0.025;
+                        const pattern = Math.floor(boss.phase / 10) % 3;
+                        const amp = 110 + Math.sin(game.level * 0.5) * 20;
+                        if (pattern === 0) {
+                            boss.x += boss.speed * boss.dir;
+                            boss.y = boss.enterY + Math.sin(boss.phase * 1.5) * 30;
+                            if (boss.x + boss.w > W || boss.x < 0) boss.dir *= -1;
+                        } else if (pattern === 1) {
+                            boss.x += boss.speed * 2.0 * boss.dir;
+                            boss.y = boss.enterY + Math.sin(boss.phase * 0.7) * 20;
+                            if (boss.x + boss.w > W || boss.x < 0) boss.dir *= -1;
+                        } else {
+                            boss.x = W / 2 + Math.sin(boss.phase * 0.9) * amp * 0.5;
+                            boss.y = boss.enterY + Math.cos(boss.phase * 0.6) * 35;
+                        }
+                        boss.x = Math.max(0, Math.min(W - boss.w, boss.x));
+                        boss.y = Math.max(10, Math.min(H - 120, boss.y));
+                        boss.attackTimer++;
+                        const interval = Math.max(16, boss.attackInterval - Math.floor(game.level / 2));
+                        if (boss.attackTimer >= interval) {
+                            boss.attackTimer = 0;
+                            bossShoot();
+                        }
+                    }
+                }
+
+                if (game.waveActive && !game.bossActive) {
+                    const diffMul = getDifficultyMultiplier();
+                    const delay = Math.max(3, Math.round((14 - Math.floor(game.level * 0.9)) / (diffMul > 1 ? 1.2 : diffMul <
+                        1 ? 0.8 : 1)));
+                    game.spawnTimer++;
+                    if (game.spawnTimer >= delay && game.chickensSpawnedInWave < game.chickensInWave) {
+                        game.spawnTimer = 0;
+                        spawnChicken();
+                    }
+                    if (game.chickensSpawnedInWave >= game.chickensInWave && game.chickens.length === 0) {
+                        game.waveActive = false;
+                        game.stage++;
+                        if (game.stage > STAGES_PER_LEVEL) {
+                            spawnBoss();
+                        } else {
+                            setTimeout(() => {
+                                if (!game.gameOver && !game.bossActive) startWave();
+                            }, 300);
+                        }
+                    }
+                }
+
+                for (let i = game.chickens.length - 1; i >= 0; i--) {
+                    const c = game.chickens[i];
+                    c.y += c.speed;
+
+                    if (c.type === 'shooter') {
+                        c.shootTimer++;
+                        if (c.shootTimer >= c.shootInterval) {
+                            c.shootTimer = 0;
+                            const angle = Math.atan2(game.player.y - c.y, game.player.x - c.x);
+                            const speed = ENEMY_BULLET_SPEED * (options.difficulty === 'hard' ? 1.3 : 1);
+                            game.enemyBullets.push({
+                                x: c.x + c.w / 2 - 4,
+                                y: c.y + c.h / 2,
+                                w: 8,
+                                h: 8,
+                                vx: Math.cos(angle) * speed,
+                                vy: Math.sin(angle) * speed,
+                            });
+                            spawnParticles(c.x + c.w / 2, c.y + c.h, '#66ff66', 3);
+                        }
+                    }
+
+                    if (c.y + c.h > H) {
+                        if (game.player.invincible === 0) {
+                            triggerDeathAnimation();
+                            game.chickens.splice(i, 1);
+                            return;
+                        }
+                        game.chickens.splice(i, 1);
+                        continue;
+                    }
+                    if (rectCollide(game.player, c) && game.player.invincible === 0) {
+                        triggerDeathAnimation();
+                        game.chickens.splice(i, 1);
+                        return;
+                    }
+                }
+
+                if (game.boss && game.boss.entered && !game.bossDefeated && rectCollide(game.player, game.boss) && game
+                    .player.invincible === 0) {
+                    triggerDeathAnimation();
+                    return;
+                }
+
+                for (let i = game.powerups.length - 1; i >= 0; i--) {
+                    const p = game.powerups[i];
+                    p.y += p.speed;
+                    if (p.y > H) { game.powerups.splice(i, 1); continue; }
+                    if (rectCollide(game.player, p)) {
+                        applyPowerup(p.type);
+                        spawnParticles(p.x + p.w / 2, p.y + p.h / 2, '#ffffff', 15);
+                        game.powerups.splice(i, 1);
+                        continue;
+                    }
+                }
+
+                for (let i = game.particles.length - 1; i >= 0; i--) {
+                    const pt = game.particles[i];
+                    pt.x += pt.vx;
+                    pt.y += pt.vy;
+                    pt.vy += 0.05;
+                    pt.life--;
+                    if (pt.life <= 0) { game.particles.splice(i, 1); continue; }
+                }
+
+                if (game.player.lives <= 0 && !game.dying) {
+                    game.gameOver = true;
+                    appState = 'gameover';
+                }
+            }
+
+            function applyPowerup(type) {
+                switch (type) {
+                    case 'shield':
+                        game.player.shield = true;
+                        spawnParticles(game.player.x + game.player.w / 2, game.player.y + game.player.h / 2, '#44ddff',
+                        15);
+                        break;
+                    case 'rapid':
+                        game.player.hasRapid = true;
+                        spawnParticles(game.player.x + game.player.w / 2, game.player.y + game.player.h / 2, '#ffaa44',
+                        15);
+                        break;
+                    case 'multi':
+                        game.player.hasMulti = true;
+                        spawnParticles(game.player.x + game.player.w / 2, game.player.y + game.player.h / 2, '#ff66ff',
+                        15);
+                        break;
+                }
+            }
+
+            function shoot() {
+                if (game.gameOver || game.bossIntro > 0 || game.dying) return;
+                playShootSound();
+                const bx = game.player.x + game.player.w / 2 - BULLET_W / 2;
+                const by = game.player.y - 6;
+                if (game.player.hasMulti) {
+                    game.bullets.push({ x: bx - 8, y: by, w: BULLET_W, h: BULLET_H });
+                    game.bullets.push({ x: bx, y: by - 2, w: BULLET_W, h: BULLET_H });
+                    game.bullets.push({ x: bx + 8, y: by, w: BULLET_W, h: BULLET_H });
+                } else {
+                    game.bullets.push({ x: bx, y: by, w: BULLET_W, h: BULLET_H });
+                }
+            }
+
+            // ─── Drawing ──────────────────────────────────────────────
+
+            function drawStars() {
+                ctx.fillStyle = '#fff';
+                for (let i = 0; i < 80; i++) {
+                    const sx = (i * 173 + i * i * 7 + 13) % W;
+                    const sy = (i * 97 + i * i * 11 + 29 + Math.floor(menuTime * 0.02)) % H;
+                    const bright = 0.15 + 0.85 * ((i * 31) % 5) / 5;
+                    ctx.globalAlpha = bright;
+                    ctx.fillRect(sx, sy, 1, 1);
+                }
+                ctx.globalAlpha = 1;
+            }
+
+            // ─── Menu Drawing ──────────────────────────────────────────
+
+            function drawMenu() {
+                menuTime++;
+                const grad = ctx.createLinearGradient(0, 0, 0, H);
+                grad.addColorStop(0, '#0a0a18');
+                grad.addColorStop(0.5, '#0d1025');
+                grad.addColorStop(1, '#0a0a18');
+                ctx.fillStyle = grad;
+                ctx.fillRect(0, 0, W, H);
+
+                for (let i = 0; i < 30; i++) {
+                    const sx = (i * 137 + i * i * 5 + 7) % W;
+                    const sy = (i * 79 + i * i * 9 + 13 + menuTime * 0.1) % H;
+                    const size = 1 + (i % 3);
+                    ctx.globalAlpha = 0.1 + 0.1 * Math.sin(menuTime * 0.02 + i);
+                    ctx.fillStyle = i % 2 === 0 ? '#66ddff' : '#ff8844';
+                    ctx.fillRect(sx, sy, size, size);
+                }
+                ctx.globalAlpha = 1;
+
+                drawStars();
+
+                ctx.strokeStyle = 'rgba(255,255,255,0.03)';
+                ctx.lineWidth = 1;
+                for (let i = 0; i < H; i += 25) {
+                    ctx.beginPath();
+                    ctx.moveTo(0, i + Math.sin(i * 0.02 + menuTime * 0.005) * 3);
+                    ctx.lineTo(W, i + Math.sin(i * 0.02 + menuTime * 0.005 + 1) * 3);
+                    ctx.stroke();
+                }
+
+                if (menuScreen === 'main') {
+                    const musicLabel = options.music ? '🔊' : '🔇';
+                    ctx.fillStyle = 'rgba(0,0,0,0.4)';
+                    ctx.beginPath();
+                    ctx.arc(W - 30, 30, 22, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.strokeStyle = options.music ? 'rgba(100,200,255,0.5)' : 'rgba(255,100,100,0.5)';
+                    ctx.lineWidth = 2;
+                    ctx.beginPath();
+                    ctx.arc(W - 30, 30, 22, 0, Math.PI * 2);
+                    ctx.stroke();
+                    ctx.font = '18px "Courier New", monospace';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillStyle = options.music ? '#66ddff' : '#ff6666';
+                    ctx.fillText(musicLabel, W - 30, 31);
+                    ctx.textBaseline = 'alphabetic';
+
+                    ctx.fillStyle = 'rgba(255,255,255,0.15)';
+                    ctx.font = '8px "Courier New", monospace';
+                    ctx.textAlign = 'center';
+                    ctx.fillText('M', W - 30, 52);
+                    ctx.textAlign = 'left';
+                }
+
+                if (menuScreen === 'main') {
+                    const chickenSize = 48;
+                    const chickenX = 70,
+                        chickenY = 70 + Math.sin(menuTime * 0.03) * 3;
+                    ctx.drawImage(chickenSprite, chickenX, chickenY, chickenSize, chickenSize);
+
+                    const glow = ctx.createRadialGradient(W / 2, 140, 10, W / 2, 140, 120);
+                    glow.addColorStop(0, 'rgba(255,136,68,0.08)');
+                    glow.addColorStop(1, 'rgba(255,136,68,0)');
+                    ctx.fillStyle = glow;
+                    ctx.fillRect(0, 0, W, 200);
+
+                    ctx.fillStyle = '#ff8844';
+                    ctx.font = 'bold 42px "Courier New", monospace';
+                    ctx.textAlign = 'left';
+                    ctx.fillText('CHICKEN', chickenX + chickenSize + 10, chickenY + chickenSize - 4);
+
+                    ctx.fillStyle = '#66ddff';
+                    ctx.font = 'bold 38px "Courier New", monospace';
+                    ctx.textAlign = 'center';
+                    const titleY = 158 + Math.sin(menuTime * 0.025) * 2;
+                    ctx.fillText('INVADERS', W / 2 + 10, titleY);
+
+                    ctx.fillStyle = '#aabbcc';
+                    ctx.font = '18px "Courier New", monospace';
+                    const subY = 196 + Math.sin(menuTime * 0.02 + 0.5) * 2;
+                    ctx.fillText('⚡ THE NEXT WAVE ⚡', W / 2, subY);
+
+                    ctx.fillStyle = 'rgba(255,255,255,0.06)';
+                    ctx.fillRect(40, 210, W - 80, 1);
+
+                    const craftAngle = Math.sin(menuTime * 0.01) * 0.2;
+                    ctx.save();
+                    ctx.translate(W - 80, 60 + Math.sin(menuTime * 0.02) * 5);
+                    ctx.rotate(craftAngle);
+                    ctx.drawImage(craftSprite, -15, -15, 30, 30);
+                    ctx.restore();
+
+                    ctx.save();
+                    ctx.translate(40, 130 + Math.cos(menuTime * 0.015) * 5);
+                    ctx.rotate(-craftAngle);
+                    ctx.drawImage(craftSprite, -12, -12, 24, 24);
+                    ctx.restore();
+
+                    for (let i = 0; i < 3; i++) {
+                        const cx = 30 + i * 180 + Math.sin(menuTime * 0.01 + i * 2) * 15;
+                        const cy = 260 + i * 80 + Math.sin(menuTime * 0.015 + i * 1.5) * 8;
+                        ctx.globalAlpha = 0.1;
+                        ctx.drawImage(chickenSprite, cx, cy, 20, 20);
+                    }
+                    ctx.globalAlpha = 1;
+
+                    ctx.fillStyle = 'rgba(255,255,255,0.12)';
+                    ctx.font = '10px "Courier New", monospace';
+                    ctx.textAlign = 'center';
+                    const hintY = 730 + Math.sin(menuTime * 0.02) * 2;
+                    ctx.fillText('⌨️ Arrow Keys / WASD  •  Space to Shoot', W / 2, hintY);
+                    ctx.fillText('👆 Touch & Drag to Move  •  Tap to Shoot', W / 2, hintY + 18);
+                    ctx.fillText('🔊 Press M to toggle Music', W / 2, hintY + 36);
+                    ctx.textAlign = 'left';
+
+                } else if (menuScreen === 'hall') {
+                    ctx.fillStyle = '#ffdd88';
+                    ctx.font = 'bold 28px "Courier New", monospace';
+                    ctx.textAlign = 'center';
+                    const hallY = 120 + Math.sin(menuTime * 0.02) * 2;
+                    ctx.fillText('🏆 HALL OF FAME', W / 2, hallY);
+                    ctx.fillStyle = 'rgba(255,255,255,0.1)';
+                    ctx.fillRect(40, 150, W - 80, 2);
+                    const entries = [
+                        { rank: 1, name: '⭐ CAPTAIN', score: 28450 },
+                        { rank: 2, name: '🔥 WARRIOR', score: 22100 },
+                        { rank: 3, name: '🛸 PILOT', score: 18900 },
+                        { rank: 4, name: '🐔 CLUCKER', score: 12340 },
+                        { rank: 5, name: '🌱 ROOKIE', score: 5670 },
+                    ];
+                    ctx.font = '16px "Courier New", monospace';
+                    ctx.textAlign = 'left';
+                    for (let i = 0; i < entries.length; i++) {
+                        const e = entries[i];
+                        const y = 190 + i * 52;
+                        const color = i === 0 ? '#ffcc44' : i === 1 ? '#aaccff' : i === 2 ? '#88bbaa' : '#667788';
+                        ctx.fillStyle = color;
+                        ctx.fillText(`#${e.rank}  ${e.name}`, 80, y);
+                        ctx.textAlign = 'right';
+                        ctx.fillText(e.score.toString(), W - 80, y);
+                        ctx.textAlign = 'left';
+                    }
+                    ctx.drawImage(chickenSprite, 30, 300, 32, 32);
+                    ctx.drawImage(chickenSprite, W - 62, 420, 32, 32);
+                    ctx.drawImage(craftSprite, 40, 460, 28, 28);
+                } else if (menuScreen === 'options') {
+                    ctx.fillStyle = '#88ddff';
+                    ctx.font = 'bold 28px "Courier New", monospace';
+                    ctx.textAlign = 'center';
+                    ctx.fillText('⚙️ OPTIONS', W / 2, 120 + Math.sin(menuTime * 0.02) * 2);
+                    ctx.fillStyle = 'rgba(255,255,255,0.1)';
+                    ctx.fillRect(40, 150, W - 80, 2);
+
+                    ctx.fillStyle = 'rgba(255,255,255,0.2)';
+                    ctx.font = '11px "Courier New", monospace';
+                    ctx.textAlign = 'center';
+                    ctx.fillText('Click a setting to toggle it', W / 2, 190);
+                    ctx.textAlign = 'left';
+
+                    ctx.drawImage(craftSprite, 30, 540, 30, 30);
+                    ctx.drawImage(chickenSprite, W - 70, 540, 36, 36);
+                }
+
+                for (let i = 0; i < currentButtons.length; i++) {
+                    drawMenuButton(currentButtons[i], i);
+                }
+
+                ctx.fillStyle = 'rgba(255,255,255,0.04)';
+                ctx.fillRect(0, H - 40, W, 1);
+                ctx.fillStyle = 'rgba(255,255,255,0.12)';
+                ctx.font = '10px "Courier New", monospace';
+                ctx.textAlign = 'center';
+                ctx.fillText('🐔 CHICKEN INVADERS – REALISTIC SHIP', W / 2, H - 18);
+                ctx.textAlign = 'left';
+
+                if (menuState.buttonFlash > 0) {
+                    ctx.fillStyle = `rgba(255,255,255,${menuState.buttonFlash / 20})`;
+                    ctx.fillRect(0, 0, W, H);
+                    menuState.buttonFlash--;
+                }
+            }
+
+            function drawMenuButton(btn, index) {
+                const isSelected = (index === menuState.selectedIndex);
+                const isHover = (index === menuState.hoverIndex);
+                const flash = menuState.buttonFlash > 0;
+                const bw = 230,
+                    bh = 46;
+                const bx = W / 2 - bw / 2;
+                const by = btn.y - bh / 2;
+
+                if (isSelected || isHover) {
+                    const grad = ctx.createRadialGradient(W / 2, btn.y, 5, W / 2, btn.y, 70);
+                    grad.addColorStop(0, `rgba(100,200,255,${isSelected ? 0.2 : 0.1})`);
+                    grad.addColorStop(1, 'rgba(100,200,255,0)');
+                    ctx.fillStyle = grad;
+                    ctx.beginPath();
+                    ctx.arc(W / 2, btn.y, 70, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+
+                let bgColor = 'rgba(20,30,50,0.6)';
+                let borderColor = 'rgba(100,150,200,0.2)';
+                let textColor = '#8899bb';
+                let shadowColor = 'transparent';
+
+                if (isSelected) {
+                    bgColor = 'rgba(40,80,140,0.7)';
+                    borderColor = '#66ddff';
+                    textColor = '#ffffff';
+                    shadowColor = 'rgba(100,200,255,0.3)';
+                } else if (isHover) {
+                    bgColor = 'rgba(30,60,100,0.6)';
+                    borderColor = 'rgba(100,200,255,0.4)';
+                    textColor = '#aaccff';
+                }
+
+                if (flash && isSelected) {
+                    borderColor = '#ffaa44';
+                    textColor = '#ffdd88';
+                }
+
+                const grad2 = ctx.createLinearGradient(bx, by, bx, by + bh);
+                grad2.addColorStop(0, bgColor);
+                grad2.addColorStop(1, bgColor.replace('0.7', '0.4').replace('0.6', '0.3'));
+                ctx.fillStyle = grad2;
+                ctx.shadowColor = shadowColor;
+                ctx.shadowBlur = isSelected ? 25 : 0;
+                ctx.beginPath();
+                ctx.roundRect(bx, by, bw, bh, 8);
+                ctx.fill();
+                ctx.shadowBlur = 0;
+
+                ctx.strokeStyle = borderColor;
+                ctx.lineWidth = isSelected ? 2 : 1;
+                ctx.beginPath();
+                ctx.roundRect(bx, by, bw, bh, 8);
+                ctx.stroke();
+
+                if (isSelected) {
+                    ctx.strokeStyle = `rgba(100,200,255,${0.1 + 0.1 * Math.sin(menuTime * 0.05)})`;
+                    ctx.lineWidth = 3;
+                    ctx.beginPath();
+                    ctx.roundRect(bx + 2, by + 2, bw - 4, bh - 4, 6);
+                    ctx.stroke();
+                }
+
+                ctx.fillStyle = textColor;
+                ctx.font = isSelected ? 'bold 16px "Courier New", monospace' : '14px "Courier New", monospace';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(btn.label, W / 2, btn.y + 1);
+
+                if (isSelected) {
+                    ctx.fillStyle = '#66ddff';
+                    ctx.font = '16px "Courier New", monospace';
+                    ctx.textAlign = 'right';
+                    ctx.fillText('▶', bx - 10, btn.y + 1);
+                    ctx.textAlign = 'left';
+                    ctx.fillText('◀', bx + bw + 10, btn.y + 1);
+                }
+                ctx.textBaseline = 'alphabetic';
+            }
+
+            // ─── Game Drawing ──────────────────────────────────────────
+
+            function drawGame() {
+                ctx.save();
+
+                if (screenShake.intensity > 0.1) {
+                    const shakeX = (Math.random() - 0.5) * screenShake.intensity * 2;
+                    const shakeY = (Math.random() - 0.5) * screenShake.intensity * 2;
+                    ctx.translate(shakeX, shakeY);
+                }
+
+                ctx.clearRect(0, 0, W, H);
+                const grad = ctx.createLinearGradient(0, 0, 0, H);
+                grad.addColorStop(0, '#0a0a18');
+                grad.addColorStop(0.5, '#0d1025');
+                grad.addColorStop(1, '#0a0a18');
+                ctx.fillStyle = grad;
+                ctx.fillRect(0, 0, W, H);
+                drawStars();
+
+                for (const pt of game.particles) {
+                    const alpha = pt.life / pt.maxLife;
+                    ctx.globalAlpha = alpha;
+                    ctx.fillStyle = pt.color;
+                    ctx.fillRect(pt.x - pt.size / 2, pt.y - pt.size / 2, pt.size, pt.size);
+                }
+                ctx.globalAlpha = 1;
+
+                for (const pt of game.deathParticles) {
+                    const alpha = pt.life / pt.maxLife;
+                    ctx.globalAlpha = alpha;
+                    ctx.fillStyle = pt.color;
+                    const size = pt.size * (0.5 + 0.5 * (pt.life / pt.maxLife));
+                    ctx.fillRect(pt.x - size / 2, pt.y - size / 2, size, size);
+                }
+                ctx.globalAlpha = 1;
+
+                for (const c of game.chickens) {
+                    ctx.drawImage(c.sprite, c.x, c.y, c.w, c.h);
+                    if (c.maxHp > 1) {
+                        const bw = c.w;
+                        const bh = 4;
+                        const bx = c.x;
+                        const by = c.y - 6;
+                        ctx.fillStyle = 'rgba(0,0,0,0.5)';
+                        ctx.fillRect(bx, by, bw, bh);
+                        ctx.fillStyle = '#66dd88';
+                        ctx.fillRect(bx, by, bw * (c.hp / c.maxHp), bh);
+                    }
+                }
+
+                if (game.boss && game.bossActive) {
+                    const b = game.boss;
+                    const grad2 = ctx.createRadialGradient(
+                        b.x + b.w / 2, b.y + b.h / 2, 5,
+                        b.x + b.w / 2, b.y + b.h / 2, 50
+                    );
+                    grad2.addColorStop(0, 'rgba(255,50,80,0.15)');
+                    grad2.addColorStop(1, 'rgba(255,50,80,0)');
+                    ctx.fillStyle = grad2;
+                    ctx.fillRect(b.x - 30, b.y - 30, b.w + 60, b.h + 60);
+                    ctx.drawImage(bossSprite, b.x, b.y, b.w, b.h);
+
+                    const barW = 100,
+                        barH = 8;
+                    const bx = W / 2 - barW / 2,
+                        by = 14;
+                    ctx.fillStyle = 'rgba(0,0,0,0.7)';
+                    ctx.fillRect(bx - 2, by - 2, barW + 4, barH + 4);
+                    const ratio = b.health / b.maxHealth;
+                    const hue = 120 * ratio;
+                    ctx.fillStyle = `hsl(${hue}, 90%, 55%)`;
+                    ctx.fillRect(bx, by, barW * Math.max(0, ratio), barH);
+                    ctx.strokeStyle = '#fff';
+                    ctx.lineWidth = 1;
+                    ctx.strokeRect(bx - 2, by - 2, barW + 4, barH + 4);
+                    ctx.fillStyle = '#ff6699';
+                    ctx.font = '10px "Courier New", monospace';
+                    ctx.textAlign = 'center';
+                    ctx.fillText(`👑 BOSS Lv.${game.level}`, W / 2, by - 4);
+                    ctx.textAlign = 'left';
+                }
+
+                // ─── PLAYER SHIP DRAWING (Realistic) ───
+                const px = game.player.x,
+                    py = game.player.y;
+
+                // 1. DUAL THRUSTER FLAMES
+                if (!game.dying) {
+                    const flameLen1 = 8 + Math.sin(game.frame * 0.3) * 3;
+                    const flameLen2 = 8 + Math.sin(game.frame * 0.3 + 1) * 3;
+
+                    // Left engine flame
+                    ctx.fillStyle = '#ff8844';
+                    ctx.shadowColor = '#ff8844';
+                    ctx.shadowBlur = 15;
+                    ctx.fillRect(px + 10, py + game.player.h, 4, flameLen1);
+                    ctx.fillStyle = '#ffaa44';
+                    ctx.shadowBlur = 8;
+                    ctx.fillRect(px + 11, py + game.player.h + 2, 2, flameLen1 - 2);
+
+                    // Right engine flame
+                    ctx.fillStyle = '#ff8844';
+                    ctx.shadowBlur = 15;
+                    ctx.fillRect(px + 22, py + game.player.h, 4, flameLen2);
+                    ctx.fillStyle = '#ffaa44';
+                    ctx.shadowBlur = 8;
+                    ctx.fillRect(px + 23, py + game.player.h + 2, 2, flameLen2 - 2);
+                    ctx.shadowBlur = 0;
+                }
+
+                // 2. SHIP BODY
+                if (game.player.invincible > 0 && Math.floor(game.frame / 6) % 2 === 0 && !game.dying) {
+                    ctx.globalAlpha = 0.5;
+                }
+                if (game.dying) {
+                    ctx.globalAlpha = 1 - (game.deathTimer / 30);
+                }
+                ctx.drawImage(craftSprite, px, py, game.player.w, game.player.h);
+
+                // 3. COCKPIT GLOW (Realism detail)
+                if (!game.dying) {
+                    ctx.shadowColor = '#66ddff';
+                    ctx.shadowBlur = 20;
+                    ctx.fillStyle = 'rgba(102, 221, 255, 0.4)';
+                    ctx.fillRect(px + 14, py + 5, 8, 4);
+                    ctx.shadowBlur = 0;
+
+                    // Secondary highlight on the nose
+                    ctx.fillStyle = 'rgba(255, 255, 255, 0.15)';
+                    ctx.fillRect(px + 16, py + 2, 4, 2);
+                }
+                ctx.globalAlpha = 1;
+
+                // 4. SHIELD EFFECT
+                if (game.player.shield && !game.dying) {
+                    ctx.strokeStyle = '#44ddff';
+                    ctx.lineWidth = 2;
+                    ctx.shadowColor = '#44ddff';
+                    ctx.shadowBlur = 20;
+                    ctx.beginPath();
+                    ctx.arc(px + game.player.w / 2, py + game.player.h / 2, game.player.w / 2 + 4, 0, Math.PI * 2);
+                    ctx.stroke();
+                    ctx.shadowBlur = 0;
+                }
+
+                // 5. POWER-UP INDICATORS
+                if (!game.dying) {
+                    if (game.player.hasRapid) {
+                        ctx.fillStyle = '#ffaa44';
+                        ctx.font = '10px "Courier New", monospace';
+                        ctx.fillText('⚡', px - 4, py + game.player.h + 16);
+                    }
+                    if (game.player.hasMulti) {
+                        ctx.fillStyle = '#ff66ff';
+                        ctx.font = '10px "Courier New", monospace';
+                        ctx.fillText('✧', px + game.player.w - 2, py + game.player.h + 16);
+                    }
+                }
+
+                // Bullets
+                for (const b of game.bullets) {
+                    ctx.drawImage(bulletSprite, b.x, b.y, b.w, b.h);
+                }
+
+                // Enemy bullets
+                for (const eb of game.enemyBullets) {
+                    ctx.fillStyle = '#66ff66';
+                    ctx.shadowColor = '#66ff66';
+                    ctx.shadowBlur = 8;
+                    ctx.beginPath();
+                    ctx.arc(eb.x + eb.w / 2, eb.y + eb.h / 2, eb.w / 2, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.shadowBlur = 0;
+                }
+
+                // Boss bullets
+                for (const bb of game.bossBullets) {
+                    ctx.fillStyle = '#ff4466';
+                    ctx.shadowColor = '#ff4466';
+                    ctx.shadowBlur = 10;
+                    ctx.beginPath();
+                    ctx.arc(bb.x + bb.w / 2, bb.y + bb.h / 2, bb.w / 2, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.shadowBlur = 0;
+                }
+
+                // Powerups
+                for (const p of game.powerups) {
+                    ctx.drawImage(p.sprite, p.x, p.y, p.w, p.h);
+                }
+
+                // HUD
+                ctx.fillStyle = '#c0d8e8';
+                ctx.font = '14px "Courier New", monospace';
+                ctx.fillText(`Score: ${game.score}`, 8, 24);
+                ctx.fillText(`Lv:${game.level}`, 8, 44);
+                ctx.fillText(`St:${game.stage}/${STAGES_PER_LEVEL}`, 8, 64);
+
+                for (let i = 0; i < game.player.lives; i++) {
+                    ctx.fillStyle = '#ff4466';
+                    ctx.fillText('❤️', 130 + i * 22, 26);
+                }
+
+                let hudX = 200;
+                if (game.player.shield) {
+                    ctx.fillStyle = '#44ddff';
+                    ctx.font = '14px "Courier New", monospace';
+                    ctx.fillText('🛡', hudX, 24);
+                    hudX += 20;
+                }
+                if (game.player.hasRapid) {
+                    ctx.fillStyle = '#ffaa44';
+                    ctx.fillText('⚡', hudX, 24);
+                    hudX += 20;
+                }
+                if (game.player.hasMulti) {
+                    ctx.fillStyle = '#ff66ff';
+                    ctx.fillText('✧', hudX, 24);
+                }
+
+                if (game.combo > 1) {
+                    ctx.fillStyle = '#ffdd44';
+                    ctx.font = 'bold 14px "Courier New", monospace';
+                    ctx.fillText(`🔥 x${game.combo}`, 8, 88);
+                }
+
+                ctx.fillStyle = 'rgba(255,255,255,0.1)';
+                ctx.font = '10px "Courier New", monospace';
+                ctx.fillText(options.music ? '🎵' : '🔇', W - 20, 20);
+
+                if (game.waveActive && !game.bossActive) {
+                    const total = game.chickensInWave;
+                    const done = game.chickensSpawnedInWave - game.chickens.length;
+                    const pct = Math.min(1, done / total);
+                    ctx.fillStyle = 'rgba(255,255,255,0.15)';
+                    ctx.fillRect(100, 48, 80, 8);
+                    ctx.fillStyle = '#66ccff';
+                    ctx.fillRect(100, 48, 80 * pct, 8);
+                    ctx.fillStyle = '#8899aa';
+                    ctx.font = '9px "Courier New", monospace';
+                    ctx.fillText(`${Math.floor(pct*100)}%`, 186, 56);
+                }
+
+                if (game.bossIntro > 0) {
+                    ctx.fillStyle = '#ff3366';
+                    ctx.font = 'bold 28px "Courier New", monospace';
+                    ctx.textAlign = 'center';
+                    ctx.fillText('⚔ BOSS APPROACHING ⚔', W / 2, H / 2 - 20);
+                    ctx.textAlign = 'left';
+                }
+
+                if (game.levelComplete) {
+                    ctx.fillStyle = '#ffdd44';
+                    ctx.font = 'bold 24px "Courier New", monospace';
+                    ctx.textAlign = 'center';
+                    ctx.fillText(`⭐ LEVEL ${game.level-1} COMPLETE! ⭐`, W / 2, H / 2 - 20);
+                    ctx.textAlign = 'left';
+                }
+
+                if (!game.touchShoot && !game.gameOver && game.frame < 180 && !game.dying) {
+                    ctx.fillStyle = 'rgba(255,255,255,0.2)';
+                    ctx.font = '12px "Courier New", monospace';
+                    ctx.textAlign = 'center';
+                    ctx.fillText('👆 Touch to move & shoot', W / 2, H - 20);
+                    ctx.textAlign = 'left';
+                }
+
+                if (game.dying && game.deathTimer < 20) {
+                    const flashAlpha = (20 - game.deathTimer) / 20 * 0.5;
+                    ctx.fillStyle = `rgba(255,255,255,${flashAlpha})`;
+                    ctx.fillRect(0, 0, W, H);
+                }
+
+                ctx.restore();
+            }
+
+            // ─── Game Over Drawing ──────────────────────────────────
+
+            function drawGameOver() {
+                ctx.clearRect(0, 0, W, H);
+                const grad = ctx.createLinearGradient(0, 0, 0, H);
+                grad.addColorStop(0, '#0a0a18');
+                grad.addColorStop(0.5, '#0d1025');
+                grad.addColorStop(1, '#0a0a18');
+                ctx.fillStyle = grad;
+                ctx.fillRect(0, 0, W, H);
+                drawStars();
+
+                ctx.fillStyle = 'rgba(0,0,0,0.6)';
+                ctx.fillRect(0, 0, W, H);
+
+                ctx.fillStyle = '#ff4466';
+                ctx.font = 'bold 42px "Courier New", monospace';
+                ctx.textAlign = 'center';
+                const pulseY = Math.sin(Date.now() * 0.003) * 3;
+                ctx.fillText('💀 GAME OVER', W / 2, H / 2 - 80 + pulseY);
+                ctx.font = '22px "Courier New", monospace';
+                ctx.fillStyle = '#ddd';
+                ctx.fillText(`Score: ${game.score}  |  Level: ${game.level}`, W / 2, H / 2 - 20);
+                ctx.fillStyle = '#ffdd44';
+                ctx.fillText(`Max Combo: x${game.maxCombo}`, W / 2, H / 2 + 20);
+
+                const bw = 80,
+                    bh = 40;
+                const spacing = 20;
+                const totalWidth = bw * 2 + spacing;
+                const startX = W / 2 - totalWidth / 2;
+                const btnY = H / 2 + 60;
+
+                ctx.fillStyle = 'rgba(40,70,120,0.8)';
+                ctx.shadowBlur = 10;
+                ctx.shadowColor = 'rgba(100,200,255,0.3)';
+                ctx.beginPath();
+                ctx.roundRect(startX, btnY, bw, bh, 6);
+                ctx.fill();
+                ctx.shadowBlur = 0;
+                ctx.strokeStyle = '#66ddff';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.roundRect(startX, btnY, bw, bh, 6);
+                ctx.stroke();
+                ctx.fillStyle = '#fff';
+                ctx.font = '16px "Courier New", monospace';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText('RETRY', startX + bw / 2, btnY + bh / 2);
+
+                ctx.fillStyle = 'rgba(30,30,50,0.8)';
+                ctx.shadowBlur = 10;
+                ctx.shadowColor = 'rgba(255,255,255,0.1)';
+                ctx.beginPath();
+                ctx.roundRect(startX + bw + spacing, btnY, bw, bh, 6);
+                ctx.fill();
+                ctx.shadowBlur = 0;
+                ctx.strokeStyle = '#8899bb';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.roundRect(startX + bw + spacing, btnY, bw, bh, 6);
+                ctx.stroke();
+                ctx.fillStyle = '#ccc';
+                ctx.font = '16px "Courier New", monospace';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText('MENU', startX + bw + spacing + bw / 2, btnY + bh / 2);
+
+                ctx.textBaseline = 'alphabetic';
+
+                ctx.fillStyle = 'rgba(255,255,255,0.15)';
+                ctx.font = '11px "Courier New", monospace';
+                ctx.textAlign = 'center';
+                ctx.fillText('Press R to retry  •  M for menu', W / 2, H - 30);
+                ctx.textAlign = 'left';
+            }
+
+            // ─── Main Loop ──────────────────────────────────────────
+
+            function loop() {
+                if (appState === 'menu') {
+                    drawMenu();
+                } else if (appState === 'playing') {
+                    updateGame();
+                    if (appState === 'gameover') {
+                        drawGameOver();
+                    } else {
+                        drawGame();
+                    }
+                } else if (appState === 'gameover') {
+                    drawGameOver();
+                }
+                requestAnimationFrame(loop);
+            }
+
+            // ─── Polyfill ──────────────────────────────────────────────
+            if (!CanvasRenderingContext2D.prototype.roundRect) {
+                CanvasRenderingContext2D.prototype.roundRect = function(x, y, w, h, r) {
+                    if (r > w / 2) r = w / 2;
+                    if (r > h / 2) r = h / 2;
+                    this.moveTo(x + r, y);
+                    this.lineTo(x + w - r, y);
+                    this.quadraticCurveTo(x + w, y, x + w, y + r);
+                    this.lineTo(x + w, y + h - r);
+                    this.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+                    this.lineTo(x + r, y + h);
+                    this.quadraticCurveTo(x, y + h, x, y + h - r);
+                    this.lineTo(x, y + r);
+                    this.quadraticCurveTo(x, y, x + r, y);
+                    return this;
+                };
+            }
+
+            // ─── Start ──────────────────────────────────────────────────
+            appState = 'menu';
+            updateOptionsButtons();
+            if (options.music) setTimeout(startBGM, 300);
+            loop();
+
+            console.log('🐔 CHICKEN INVADERS – REALISTIC SHIP!');
+            console.log('🛸 New 12x12 ship with cockpit glow and dual thrusters!');
+
+        })();
+    </script>
+</body>
+</html>
