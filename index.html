@@ -289,7 +289,7 @@
                 <div>Ships: <span id="menuShips">1</span>/5 &nbsp;•&nbsp; Achievements: <span id="menuAch">0</span>/12</div>
                 <div>🪙 <span id="menuCoins">0</span> coins &nbsp;•&nbsp; Best Level: <span id="menuLevel">1</span></div>
             </div>
-            <div style="margin-top:10px;font-size:11px;color:#445566;pointer-events:none;">🎮 Touch/Click to move &amp; shoot</div>
+            <div style="margin-top:10px;font-size:11px;color:#445566;pointer-events:none;">⌨️ WASD / Arrow Keys to move • Space to shoot</div>
         </div>
 
         <div id="gameover">
@@ -476,6 +476,8 @@
                 mouseDown: false,
                 shipMeshes: [],
                 chickenMeshes: [],
+                // Keyboard movement
+                keys: { left: false, right: false },
             };
 
             const options = {
@@ -1199,9 +1201,19 @@
 
                 game.frame++;
 
-                // Player movement
+                // ── Keyboard movement ──
+                const speed = 0.12 * (SHIPS[game.selectedShip]?.speed || 1);
+                if (game.keys.left) {
+                    game.playerX -= speed * 0.8;
+                }
+                if (game.keys.right) {
+                    game.playerX += speed * 0.8;
+                }
+                // Clamp
+                game.playerX = Math.max(-5, Math.min(5, game.playerX));
+
+                // Player movement (touch/mouse takes priority if active)
                 if (playerGroup) {
-                    const speed = 0.12 * (SHIPS[game.selectedShip]?.speed || 1);
                     let targetX = game.playerX;
                     if (game.touchX !== null) {
                         targetX = game.touchX;
@@ -1220,7 +1232,7 @@
                     }
                 }
 
-                // Shooting
+                // Shooting (keyboard space or touch)
                 if (game.shootCooldown > 0) game.shootCooldown--;
                 if (game.touchActive || keys.space) {
                     if (game.shootCooldown <= 0) {
@@ -1571,9 +1583,8 @@
             let keys = { space: false };
             let touchX = null;
 
-            // ─── MENU BUTTON EVENTS (FIXED) ────────────────────────
+            // ─── MENU BUTTON EVENTS ─────────────────────────────────
 
-            // Play button
             playBtn.addEventListener('click', function(e) {
                 e.stopPropagation();
                 e.preventDefault();
@@ -1585,7 +1596,6 @@
                 startGame();
             });
 
-            // Shop button
             shopBtn.addEventListener('click', function(e) {
                 e.stopPropagation();
                 e.preventDefault();
@@ -1597,7 +1607,6 @@
                 showToast('🛒 Shop coming soon in 3D!', 2000);
             });
 
-            // Stats button
             statsBtn.addEventListener('click', function(e) {
                 e.stopPropagation();
                 e.preventDefault();
@@ -1611,7 +1620,6 @@
                     '/12 achievements', 2000);
             });
 
-            // Retry button
             retryBtn.addEventListener('click', function(e) {
                 e.stopPropagation();
                 e.preventDefault();
@@ -1623,14 +1631,12 @@
                 startGame();
             });
 
-            // Menu button (from game over)
             menuBtn.addEventListener('click', function(e) {
                 e.stopPropagation();
                 e.preventDefault();
                 gameoverEl.classList.remove('show');
                 menuEl.classList.remove('hidden');
                 updateHUD();
-                // Reset player position
                 if (playerGroup) {
                     playerGroup.position.set(0, 0.5, 4);
                     playerGroup.visible = true;
@@ -1648,12 +1654,11 @@
                 }
             });
 
-            // ─── CANVAS INPUT ──────────────────────────────────────
+            // ─── CANVAS INPUT (Touch/Mouse) ────────────────────────
 
             const canvas = renderer.domElement;
 
             canvas.addEventListener('touchstart', function(e) {
-                // Ignore touch if menu is visible
                 if (!menuEl.classList.contains('hidden')) return;
                 if (gameoverEl.classList.contains('show')) return;
                 e.preventDefault();
@@ -1717,23 +1722,36 @@
                 game.touchX = null;
             });
 
-            // ─── Keyboard ──────────────────────────────────────────────
+            // ─── KEYBOARD ──────────────────────────────────────────────
 
             document.addEventListener('keydown', function(e) {
-                if (e.key === ' ' || e.key === 'Space') {
+                const key = e.key;
+                // Movement keys
+                if (key === 'a' || key === 'A' || key === 'ArrowLeft') {
+                    e.preventDefault();
+                    game.keys.left = true;
+                }
+                if (key === 'd' || key === 'D' || key === 'ArrowRight') {
+                    e.preventDefault();
+                    game.keys.right = true;
+                }
+                // Shoot
+                if (key === ' ' || key === 'Space') {
                     e.preventDefault();
                     keys.space = true;
-                    // If menu is visible, trigger play
+                    // If menu is visible, start game
                     if (!menuEl.classList.contains('hidden')) {
                         startGame();
                     }
                 }
-                if (e.key === 'r' || e.key === 'R') {
+                // Retry
+                if (key === 'r' || key === 'R') {
                     if (game.gameOver || gameoverEl.classList.contains('show')) {
                         startGame();
                     }
                 }
-                if (e.key === 'm' || e.key === 'M') {
+                // Menu
+                if (key === 'm' || key === 'M') {
                     if (gameoverEl.classList.contains('show')) {
                         gameoverEl.classList.remove('show');
                         menuEl.classList.remove('hidden');
@@ -1744,7 +1762,8 @@
                         }
                     }
                 }
-                if (e.key === 'Enter') {
+                // Enter to start from menu
+                if (key === 'Enter') {
                     if (!menuEl.classList.contains('hidden')) {
                         startGame();
                     }
@@ -1752,7 +1771,16 @@
             });
 
             document.addEventListener('keyup', function(e) {
-                if (e.key === ' ' || e.key === 'Space') {
+                const key = e.key;
+                if (key === 'a' || key === 'A' || key === 'ArrowLeft') {
+                    e.preventDefault();
+                    game.keys.left = false;
+                }
+                if (key === 'd' || key === 'D' || key === 'ArrowRight') {
+                    e.preventDefault();
+                    game.keys.right = false;
+                }
+                if (key === ' ' || key === 'Space') {
                     e.preventDefault();
                     keys.space = false;
                 }
@@ -1767,7 +1795,6 @@
 
                 // Only update game if playing and menu hidden
                 if (!menuEl.classList.contains('hidden') || gameoverEl.classList.contains('show')) {
-                    // Still render scene but don't update game logic
                     stars.rotation.y += 0.0002;
                     renderer.render(scene, camera);
                     return;
@@ -1806,7 +1833,7 @@
             animate();
 
             console.log('🐔 CHICKEN INVADERS 3D loaded!');
-            console.log('🎮 Menu buttons fixed – click PLAY to start!');
+            console.log('⌨️ WASD / Arrow Keys to move, Space to shoot');
 
         })();
     </script>
